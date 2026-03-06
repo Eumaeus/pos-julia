@@ -5,11 +5,16 @@ pos_type_map = Dict(
     "particle" => "g",
     "conj" => "c",
     "prep" => "r",
-    "adv" => "d",
+    "adverb" => "d",
     "interj" => "i",
     "pronoun" => "p",
+    "pron1" => "p",
+    "pron2" => "p",
+    "pron" => "p",
     "article" => "l",
-    # Add more if needed, e.g., "numeral" => "m" if 'm' is used for numerals
+    "numeral" => "m",
+    "punct" => "u",
+    # Add more if needed
 )
 
 person_map = Dict(
@@ -77,12 +82,20 @@ function parse_morpheus(input_file::String, output_file::String, error_log::Stri
     lines = readlines(input_file)
     open(output_file, "w") do out
         open(error_log, "w") do err
-            for i in 1:2:length(lines)-1  # Assume paired lines
-                form = strip(lines[i])
-                if isempty(form)
+            i = 1
+            while i <= length(lines)
+                line = strip(lines[i])
+                if isempty(line)
+                    i += 1
                     continue
                 end
-                parsing_line = lines[i+1]
+                form = line
+                i += 1
+                if i > length(lines)
+                    break
+                end
+                parsing_line = lines[i]
+                i += 1
                 matches = collect(eachmatch(r"<NL>(.*?)</NL>", parsing_line))
                 for m in matches
                     content = m.captures[1]
@@ -112,25 +125,60 @@ function parse_morpheus(input_file::String, output_file::String, error_log::Stri
                     # Check for indeclform
                     is_indecl = "indeclform" in attr
                     
-                    # Remove known non-features if needed, but ignore for now
+                    # Remove known non-features
                     features = copy(attr)
+                    filter!(a -> a != "part", features)  # Ignore 'part' for participles
                     
-                    # If indecl, type is typically the last token
+                    stem_class = ""
                     type_str = ""
                     if is_indecl
                         type_str = attr[end]
-                        # Remove indeclform and type from features for mapping
                         filter!(a -> a != "indeclform" && a != type_str, features)
                     else
-                        # For declinable, last is stem/class, remove it
+                        # For declinable, last is stem/class, remove it if present
                         if !isempty(attr)
-                            pop!(features)
+                            stem_class = pop!(features)
                         end
+                    end
+                    
+                    # Special handling for different morph_pos
+                    if morph_pos == "V"
+                        pos = "v"
+                    elseif morph_pos == "P"
+                        pos = "v"
+                        mood = "p"
+                    elseif morph_pos == "D"
+                        pos = "d"
+                    elseif morph_pos == "A"
+                        pos = "a"
+                    elseif morph_pos == "N"
+                        if is_indecl && haskey(pos_type_map, type_str)
+                            pos = pos_type_map[type_str]
+                        elseif lemma in article_lemmas
+                            pos = "l"
+                        elseif "compar" in attr || "superl" in attr
+                            pos = "a"
+                        elseif any(in(features), keys(gender_map)) || any(in(features), keys(case_map)) || any(in(features), keys(number_map))
+                            # Distinguish adjective vs noun based on stem_class
+                            if !is_indecl && stem_class != "" && count(c -> c == '_', stem_class) == 2
+                                pos = "a"
+                            else
+                                pos = "n"
+                            end
+                        else
+                            pos = "x"  # Irregular or unknown
+                        end
+                    else
+                        write(err, "Unknown morph POS: $morph_pos for $content\n")
+                        continue
                     end
                     
                     # Map features
                     for a in features
-                        if haskey(person_map, a)
+                        if occursin("/", a)
+                            continue  # Handle splits later
+                        end
+                        if pos == "v" && haskey(person_map, a)
                             person = person_map[a]
                         elseif haskey(number_map, a)
                             num = number_map[a]
@@ -146,28 +194,27 @@ function parse_morpheus(input_file::String, output_file::String, error_log::Stri
                             cas = case_map[a]
                         elseif haskey(degree_map, a)
                             degree = degree_map[a]
-                        # Ignore dialects like attic, poetic, contr
+                        # Ignore dialects, contr, etc.
                         end
                     end
                     
-                    # Determine POS
-                    if morph_pos == "V"
-                        pos = "v"
-                    elseif morph_pos == "N"
-                        if is_indecl && haskey(pos_type_map, type_str)
-                            pos = pos_type_map[type_str]
-                        elseif lemma in article_lemmas
-                            pos = "l"
-                        elseif degree != "-"
-                            pos = "a"
-                        elseif gend != "-" || cas != "-" || num != "-"  # Has nominal features
-                            pos = "n"
-                        else
-                            pos = "x"  # Irregular or unknown
+                    # Now handle ambiguities with /
+                    gend_list = [gend]
+                    cas_list = [cas]
+                    num_list = [num]  # Rarely ambiguous, but just in case
+                    
+                    for a in features
+                        if occursin("/", a)
+                            parts = split(a, "/")
+                            if all(p -> haskey(gender_map, p), parts)
+                                gend_list = [gender_map[p] for p in parts]
+                            elseif all(p -> haskey(case_map, p), parts)
+                                cas_list = [case_map[p] for p in parts]
+                            elseif all(p -> haskey(number_map, p), parts)
+                                num_list = [number_map[p] for p in parts]
+                            # Add more if needed for other fields
+                            end
                         end
-                    else
-                        write(err, "Unknown morph POS: $morph_pos for $content\n")
-                        continue
                     end
                     
                     if isempty(pos)
@@ -175,18 +222,22 @@ function parse_morpheus(input_file::String, output_file::String, error_log::Stri
                         continue
                     end
                     
-                    # Construct tag
-                    tag = pos * person * num * tense * mood * voice * gend * cas * degree
-                    
-                    # Output
-                    write(out, "$form\t$lemma\t$tag\n")
+                    # Generate tags for each combination
+                    for g in gend_list
+                        for c in cas_list
+                            for n in num_list
+                                tag = pos * person * n * tense * mood * voice * g * c * degree
+                                write(out, "$form\t$lemma\t$tag\n")
+                            end
+                        end
+                    end
                 end
             end
         end
     end
 end
 
-# Function to validate against hand-parsed TSV
+# Function to validate against hand-parsed TSV (unchanged)
 function validate_output(output_file::String, hand_tsv::String, validation_log::String)
     # Read output into dict: form => Set of (lemma, tag)
     parsed = Dict{String, Set{Tuple{String, String}}}()

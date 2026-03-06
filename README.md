@@ -17,8 +17,9 @@ parse_morpheus("training/training_analysis.txt", "output/parsed_output.tsv", "ou
 
 ## Error Progress
 
-1. Error: 10,362. Validation: 253,807. 
-1. Error: 0. Validation: 235,778.
-1. Error: 0. Validation: 220.478.
-1. Error: 0. Validation: 209,767.
-1. Error: 0. Validation: 205,148
+1. Parsed: 126,436. Error: 10,362. Validation: 253,807. 
+1. Parsed: 195,149. Error: 0. Validation: 235,778.
+1. Parsed: 195,149. Error: 0. Validation: 220.478.
+1. Parsed: 195,149. Error: 0. Validation: 209,767.
+1. Parsed: 195,149. Error: 0. Validation: 205,148
+1. Parsed: 195,149. Error: 0. Validation: 203,101.
